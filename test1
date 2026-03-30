@@ -1,0 +1,32 @@
+from pynput import keyboard
+import time
+
+# Dictionary to store the start time of each key press
+key_press_times = {}
+
+def on_press(key):
+    # Only record the start time if the key isn't already being held down
+    # (Prevents issues with keyboard auto-repeat)
+    if key not in key_press_times:
+        key_press_times[key] = time.time()
+
+def on_release(key):
+    if key in key_press_times:
+        # Calculate duration
+        start_time = key_press_times.pop(key)
+        duration = time.time() - start_time
+        
+        # Format the key name for readability
+        key_name = str(key).replace("'", "")
+        print(f"Key [{key_name}] held for: {duration:.4f} seconds")
+
+    # Stop listener if 'Esc' is pressed
+    if key == keyboard.Key.esc:
+        print("Exiting...")
+        return False
+
+print("Press and hold keys to see duration. Press 'Esc' to stop.")
+
+# Collect events until released
+with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
+    listener.join()
