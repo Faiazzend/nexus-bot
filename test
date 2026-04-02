@@ -12,118 +12,129 @@ ENCOUNTER_TEMPLATE = 'encounter_start.png'
 
 pyautogui.PAUSE = 0.0       
 
-# YOUR PERFECT MOVEMENT TIMING
-BASE_HOLD = 0.08   
-BASE_DELAY = 0.07           
+# MOVEMENT TIMING
+BASE_HOLD = 0.15   
+BASE_DELAY = 0.05 
 
-# GRID BOUNDARIES (4 columns x 3 rows)
-GRID_WIDTH = 4  
-GRID_HEIGHT = 3 
+# GRID BOUNDARIES
+GRID_WIDTH = 5
+GRID_HEIGHT = 1
 TARGET_WINDOW_TITLE = 'Poke Nexus'
 
 # COORDINATE BOX FOR ENCOUNTER DETECTION
 OCR_BOX = (630, 134, 670, 170)
+
+# RESET LOGIC
+STALL_THRESHOLD = 30 # Seconds to wait before re-centering window
 # =================================================
 
 class PokeBot:
     def __init__(self, win):
         self.win = win
-        self.curr_x = 0
+        self.last_direction = None 
+        self.curr_x = 0  
         self.curr_y = 0
-        self.last_move = None
+        self.last_encounter_time = time.time() # Track the last time a fight happened
         
-        # Pre-load templates
         self.fight_tpl = cv2.imread(TEMPLATE_FILE, 0)
         self.enc_tpl = cv2.imread(ENCOUNTER_TEMPLATE, 0)
 
-    def is_in_battle(self):
-        """
-        Two-Stage Logic: 
-        1. Look for encounter_start at specific coords.
-        2. If found, wait and verify with fight_template.
-        """
+    def stop_moving(self):
+        if self.last_direction:
+            pyautogui.keyUp(self.last_direction)
+            self.last_direction = None
+
+    def check_for_encounter(self):
         try:
-            # --- STAGE 1: Check small box for encounter start ---
-            search_left = self.win.left + OCR_BOX[0]
-            search_top = self.win.top + OCR_BOX[1]
-            search_right = self.win.left + OCR_BOX[2]
-            search_bottom = self.win.top + OCR_BOX[3]
+            bbox = (self.win.left + OCR_BOX[0], self.win.top + OCR_BOX[1], 
+                    self.win.left + OCR_BOX[2], self.win.top + OCR_BOX[3])
+            cap = ImageGrab.grab(bbox=bbox)
+            gray_frame = cv2.cvtColor(np.array(cap), cv2.COLOR_RGB2GRAY)
 
-            cap_enc = ImageGrab.grab(bbox=(search_left, search_top, search_right, search_bottom))
-            gray_enc = cv2.cvtColor(np.array(cap_enc), cv2.COLOR_RGB2GRAY)
-
-            match_enc = 0
             if self.enc_tpl is not None:
-                res_enc = cv2.matchTemplate(gray_enc, self.enc_tpl, cv2.TM_CCOEFF_NORMED)
-                _, match_enc, _, _ = cv2.minMaxLoc(res_enc)
-
-            # If encounter NOT detected, return False immediately to continue moving
-            if match_enc < 0.80:
-                print(f"[*] Searching... Tile: ({self.curr_x}, {self.curr_y})", end="\r")
-                return False
-
-            # --- STAGE 2: Encounter Found! Now confirm Fight Menu ---
-            print("\n[!] Encounter transition detected! Waiting for Menu...")
-            
-            # We loop a few times to wait for the animation/fade-in to finish
-            for _ in range(10): 
-                time.sleep(0.5)
-                # Grab a larger area where the 'Fight' button usually appears
-                cap_fight = ImageGrab.grab(bbox=(self.win.left + 200, self.win.top + 200, 
-                                               self.win.left + 800, self.win.top + 650))
-                gray_fight = cv2.cvtColor(np.array(cap_fight), cv2.COLOR_RGB2GRAY)
-
-                if self.fight_tpl is not None:
-                    res_f = cv2.matchTemplate(gray_fight, self.fight_tpl, cv2.TM_CCOEFF_NORMED)
-                    _, match_fight, _, _ = cv2.minMaxLoc(res_f)
-                    
-                    if match_fight > 0.75:
-                        print("[+] Fight Menu confirmed.")
-                        return True
-            
-            return False # Transition happened but menu never appeared
-        except Exception:
+                res = cv2.matchTemplate(gray_frame, self.enc_tpl, cv2.TM_CCOEFF_NORMED)
+                _, max_val, _, _ = cv2.minMaxLoc(res)
+                return max_val > 0.85 
+            return False
+        except:
             return False
 
+    def wait_for_fight_menu(self):
+        self.stop_moving()
+        print("\n[!] Encounter detected! Confirming menu...")
+        for _ in range(12):
+            time.sleep(0.5) 
+            try:
+                cap = ImageGrab.grab(bbox=(self.win.left + 200, self.win.top + 200, 
+                                           self.win.left + 800, self.win.top + 650))
+                gray_fight = cv2.cvtColor(np.array(cap), cv2.COLOR_RGB2GRAY)
+                if self.fight_tpl is not None:
+                    res = cv2.matchTemplate(gray_fight, self.fight_tpl, cv2.TM_CCOEFF_NORMED)
+                    _, max_val, _, _ = cv2.minMaxLoc(res)
+                    if max_val > 0.75:
+                        return True
+            except:
+                continue
+        return False
+
     def combat_sequence(self):
-        print(">>> STARTING COMBAT")
+        print(">>> COMBAT SEQUENCE")
+        time.sleep(random.uniform(0.1, 0.2))
         pyautogui.press('1') 
-        time.sleep(0.4)      
+        time.sleep(random.uniform(0.4, 0.6))
         pyautogui.press('1') 
         time.sleep(4.5) 
-        print(">>> Battle Finished. Resuming.")
+        self.last_encounter_time = time.time() # Reset the timer after fight ends
+        print(">>> Battle ended. Resuming...")
 
     def move(self):
-        if self.last_move:
-            pyautogui.keyUp(self.last_move)
-            time.sleep(0.01)
-
-        # Stage-based check happens here
-        if self.is_in_battle():
-            self.combat_sequence()
-            self.last_move = None
+        # 1. Stall/Reset Check
+        if time.time() - self.last_encounter_time > STALL_THRESHOLD:
+            print(f"\n[!] No fight for {STALL_THRESHOLD}s. Re-centering window...")
+            self.stop_moving()
+            new_win = setup_game_window()
+            if new_win:
+                self.win = new_win
+                self.last_encounter_time = time.time() # Reset timer to prevent loop
             return
 
-        possible_moves = []
-        if self.curr_y > 0: possible_moves.append(('w', 0, -1))
-        if self.curr_y < (GRID_HEIGHT - 1): possible_moves.append(('s', 0, 1))
-        if self.curr_x > 0: possible_moves.append(('a', -1, 0))
-        if self.curr_x < (GRID_WIDTH - 1): possible_moves.append(('d', 1, 0))
+        # 2. Key Selection
+        valid_keys = []
+        if self.curr_y > 0: valid_keys.append(('w', 0, -1))
+        if self.curr_y < (GRID_HEIGHT - 1): valid_keys.append(('s', 0, 1))
+        if self.curr_x > 0: valid_keys.append(('a', -1, 0))
+        if self.curr_x < (GRID_WIDTH - 1): valid_keys.append(('d', 1, 0))
 
-        if not possible_moves: return
+        if not valid_keys: return
+        new_direction, dx, dy = random.choice(valid_keys)
 
-        direction, dx, dy = random.choice(possible_moves)
-        pyautogui.keyDown(direction)
-        self.last_move = direction
         self.curr_x += dx
         self.curr_y += dy
 
-        time.sleep(random.uniform(BASE_HOLD - 0.01, BASE_HOLD + 0.01))
-        time.sleep(BASE_DELAY)
+        if new_direction != self.last_direction:
+            self.stop_moving()
+            pyautogui.keyDown(new_direction)
+            self.last_direction = new_direction
+        
+        time.sleep(BASE_HOLD + random.uniform(-0.005, 0.005))
+
+        if self.check_for_encounter():
+            self.curr_x -= dx
+            self.curr_y -= dy
+            self.stop_moving()
+            if self.wait_for_fight_menu():
+                self.combat_sequence()
+        else:
+            print(f"[*] Tile: ({self.curr_x}, {self.curr_y}) | Time since fight: {int(time.time() - self.last_encounter_time)}s ", end="\r")
+            time.sleep(BASE_DELAY)
 
 def setup_game_window():
     try:
-        win = gw.getWindowsWithTitle(TARGET_WINDOW_TITLE)[0]
+        win_list = gw.getWindowsWithTitle(TARGET_WINDOW_TITLE)
+        if not win_list:
+            print(f"[!] Could not find window: {TARGET_WINDOW_TITLE}")
+            return None
+        win = win_list[0]
         win.restore()
         win.activate()
         win.moveTo(-7, 0)
@@ -132,7 +143,7 @@ def setup_game_window():
         pyautogui.click(win.left + 512, win.top + 384)
         return win
     except Exception as e:
-        print(f"[!] Error: {e}")
+        print(f"[!] Window Error: {e}")
         return None
 
 if __name__ == "__main__":
@@ -143,5 +154,5 @@ if __name__ == "__main__":
             while True:
                 bot.move()
         except KeyboardInterrupt:
-            if bot.last_move: pyautogui.keyUp(bot.last_move)
+            bot.stop_moving()
             print("\n[!] Bot stopped.")
