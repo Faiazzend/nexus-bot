@@ -5,28 +5,34 @@ import numpy as np
 from PIL import ImageGrab
 import time
 import random
+import subprocess
+import os
 
 # ================= CONFIGURATION =================
 TEMPLATE_FILE = 'fight_template.png'
 ENCOUNTER_TEMPLATE = 'encounter_start.png' 
+BIKE_TEMPLATE = 'cycle.png'
 
-pyautogui.PAUSE = 0.0       
-
-# MOVEMENT TIMING
-BASE_HOLD = 0.15   
-BASE_DELAY = 0.05 
-
-# GRID BOUNDARIES
-GRID_WIDTH = 5
-GRID_HEIGHT = 1
+GAME_PATH = r"C:\Users\FaiaZZ\Desktop\Nexus_Win64_7.0.241218-R1\Poke Nexus.exe"
 TARGET_WINDOW_TITLE = 'Poke Nexus'
 
-# COORDINATE BOX FOR ENCOUNTER DETECTION
-OCR_BOX = (630, 134, 670, 170)
+pyautogui.PAUSE = 0.0        
 
-# RESET LOGIC
-STALL_THRESHOLD = 30 # Seconds to wait before re-centering window
+# TIMINGS
+BASE_HOLD = 0.15   
+BASE_DELAY = 0.05 
+STALL_TIMEOUT = 120       
+
+# GRID
+GRID_WIDTH = 5
+GRID_HEIGHT = 1
+
+# DETECTION BOXES
+OCR_BOX = (630, 134, 670, 170)
+BIKE_BOX = (505, 425, 518, 448) 
+11
 # =================================================
+
 
 class PokeBot:
     def __init__(self, win):
@@ -34,10 +40,11 @@ class PokeBot:
         self.last_direction = None 
         self.curr_x = 0  
         self.curr_y = 0
-        self.last_encounter_time = time.time() # Track the last time a fight happened
+        self.last_encounter_time = time.time()
         
         self.fight_tpl = cv2.imread(TEMPLATE_FILE, 0)
         self.enc_tpl = cv2.imread(ENCOUNTER_TEMPLATE, 0)
+        self.bike_tpl = cv2.imread(BIKE_TEMPLATE, 0)
 
     def stop_moving(self):
         if self.last_direction:
@@ -46,68 +53,93 @@ class PokeBot:
 
     def check_for_encounter(self):
         try:
-            bbox = (self.win.left + OCR_BOX[0], self.win.top + OCR_BOX[1], 
-                    self.win.left + OCR_BOX[2], self.win.top + OCR_BOX[3])
+            bbox = (
+                self.win.left + OCR_BOX[0],
+                self.win.top + OCR_BOX[1], 
+                self.win.left + OCR_BOX[2],
+                self.win.top + OCR_BOX[3]
+            )
             cap = ImageGrab.grab(bbox=bbox)
-            gray_frame = cv2.cvtColor(np.array(cap), cv2.COLOR_RGB2GRAY)
+            gray = cv2.cvtColor(np.array(cap), cv2.COLOR_RGB2GRAY)
 
             if self.enc_tpl is not None:
-                res = cv2.matchTemplate(gray_frame, self.enc_tpl, cv2.TM_CCOEFF_NORMED)
+                res = cv2.matchTemplate(gray, self.enc_tpl, cv2.TM_CCOEFF_NORMED)
                 _, max_val, _, _ = cv2.minMaxLoc(res)
-                return max_val > 0.85 
+                return max_val > 0.85
             return False
         except:
             return False
 
-    def wait_for_fight_menu(self):
+    def check_bicycle(self):
         self.stop_moving()
-        print("\n[!] Encounter detected! Confirming menu...")
-        for _ in range(12):
-            time.sleep(0.5) 
-            try:
-                cap = ImageGrab.grab(bbox=(self.win.left + 200, self.win.top + 200, 
-                                           self.win.left + 800, self.win.top + 650))
-                gray_fight = cv2.cvtColor(np.array(cap), cv2.COLOR_RGB2GRAY)
-                if self.fight_tpl is not None:
-                    res = cv2.matchTemplate(gray_fight, self.fight_tpl, cv2.TM_CCOEFF_NORMED)
-                    _, max_val, _, _ = cv2.minMaxLoc(res)
-                    if max_val > 0.75:
-                        return True
-            except:
-                continue
-        return False
+
+        # 👇 Human-like micro tap before detection
+        press_time = random.uniform(0.04, 0.09)
+        pyautogui.keyDown('s')
+        time.sleep(press_time)
+        pyautogui.keyUp('s')
+
+        # Small settle delay
+        time.sleep(random.uniform(0.08, 0.15))
+
+        try:
+            bbox = (
+                self.win.left + BIKE_BOX[0],
+                self.win.top + BIKE_BOX[1], 
+                self.win.left + BIKE_BOX[2],
+                self.win.top + BIKE_BOX[3]
+            )
+            cap = ImageGrab.grab(bbox=bbox)
+            gray = cv2.cvtColor(np.array(cap), cv2.COLOR_RGB2GRAY)
+
+            if self.bike_tpl is not None:
+                res = cv2.matchTemplate(gray, self.bike_tpl, cv2.TM_CCOEFF_NORMED)
+                _, max_val, _, _ = cv2.minMaxLoc(res)
+
+                if max_val < 0.85:
+                    print("[*] Bike not detected. Toggling...")
+                    pyautogui.press('b')
+                    time.sleep(random.uniform(0.4, 0.6))
+        except:
+            pass
 
     def combat_sequence(self):
-        print(">>> COMBAT SEQUENCE")
-        time.sleep(random.uniform(0.1, 0.2))
-        pyautogui.press('1') 
+        self.stop_moving()
+        print("\n[!] BATTLE START...")
+        time.sleep(2.0)
+
+        pyautogui.press('1')
         time.sleep(random.uniform(0.4, 0.6))
-        pyautogui.press('1') 
-        time.sleep(4.5) 
-        self.last_encounter_time = time.time() # Reset the timer after fight ends
-        print(">>> Battle ended. Resuming...")
+        pyautogui.press('1')
+
+        time.sleep(4.5)
+
+        self.last_encounter_time = time.time()
+        print(">>> Battle finished.")
 
     def move(self):
-        # 1. Stall/Reset Check
-        if time.time() - self.last_encounter_time > STALL_THRESHOLD:
-            print(f"\n[!] No fight for {STALL_THRESHOLD}s. Re-centering window...")
-            self.stop_moving()
-            new_win = setup_game_window()
-            if new_win:
-                self.win = new_win
-                self.last_encounter_time = time.time() # Reset timer to prevent loop
+        now = time.time()
+
+        # Restart if no encounters
+        if now - self.last_encounter_time > STALL_TIMEOUT:
+            print(f"\n[!] No encounter for {STALL_TIMEOUT}s. Restarting game...")
+            self.win = launch_and_setup_game(force_restart=True, bot=self)
+            self.last_encounter_time = now
             return
 
-        # 2. Key Selection
+        # ===== SMOOTH MOVEMENT =====
         valid_keys = []
         if self.curr_y > 0: valid_keys.append(('w', 0, -1))
         if self.curr_y < (GRID_HEIGHT - 1): valid_keys.append(('s', 0, 1))
         if self.curr_x > 0: valid_keys.append(('a', -1, 0))
         if self.curr_x < (GRID_WIDTH - 1): valid_keys.append(('d', 1, 0))
 
-        if not valid_keys: return
+        if not valid_keys:
+            return
+
         new_direction, dx, dy = random.choice(valid_keys)
 
+        # Update BEFORE move
         self.curr_x += dx
         self.curr_y += dy
 
@@ -115,41 +147,84 @@ class PokeBot:
             self.stop_moving()
             pyautogui.keyDown(new_direction)
             self.last_direction = new_direction
-        
+
         time.sleep(BASE_HOLD + random.uniform(-0.005, 0.005))
 
         if self.check_for_encounter():
+            # DESYNC FIX
             self.curr_x -= dx
             self.curr_y -= dy
+
             self.stop_moving()
-            if self.wait_for_fight_menu():
-                self.combat_sequence()
+            self.combat_sequence()
         else:
-            print(f"[*] Tile: ({self.curr_x}, {self.curr_y}) | Time since fight: {int(time.time() - self.last_encounter_time)}s ", end="\r")
+            print(f"[*] Pos: ({self.curr_x}, {self.curr_y}) | Key: {new_direction}   ", end="\r")
             time.sleep(BASE_DELAY)
 
-def setup_game_window():
-    try:
-        win_list = gw.getWindowsWithTitle(TARGET_WINDOW_TITLE)
-        if not win_list:
-            print(f"[!] Could not find window: {TARGET_WINDOW_TITLE}")
+
+def launch_and_setup_game(force_restart=False, bot=None):
+    existing_wins = gw.getWindowsWithTitle(TARGET_WINDOW_TITLE)
+
+    if existing_wins and not force_restart:
+        print("[*] Game window found. Attaching...")
+        win = existing_wins[0]
+    else:
+        if force_restart:
+            os.system(f"taskkill /f /im \"{os.path.basename(GAME_PATH)}\" >nul 2>&1")
+            time.sleep(1)
+
+        print(f"[*] Launching: {GAME_PATH}")
+        subprocess.Popen(GAME_PATH)
+
+        win = None
+        for _ in range(30):
+            wins = gw.getWindowsWithTitle(TARGET_WINDOW_TITLE)
+            if wins:
+                win = wins[0]
+                break
+            time.sleep(1)
+
+        if not win:
             return None
-        win = win_list[0]
-        win.restore()
-        win.activate()
-        win.moveTo(-7, 0)
-        win.resizeTo(1024, 768)
-        time.sleep(1.0)
-        pyautogui.click(win.left + 512, win.top + 384)
-        return win
-    except Exception as e:
-        print(f"[!] Window Error: {e}")
-        return None
+
+        time.sleep(5)
+
+    # Standardize window
+    win.restore()
+    win.activate()
+    win.moveTo(-7, 0)
+    win.resizeTo(1024, 768)
+
+    time.sleep(1)
+
+    # Fresh session setup
+    if force_restart or not existing_wins:
+        print("[*] New session detected. Connecting...")
+        pyautogui.click(win.left + 550, win.top + 580)
+        time.sleep(10)
+
+        # Reset orientation
+        pyautogui.keyDown('s')
+        time.sleep(0.05)
+        pyautogui.keyUp('s')
+
+        # 🚴 Bike check ONLY here
+        if bot:
+            bot.win = win
+            bot.check_bicycle()
+
+    return win
+
 
 if __name__ == "__main__":
-    window = setup_game_window()
-    if window:
-        bot = PokeBot(window)
+    game_win = launch_and_setup_game(force_restart=False)
+
+    if game_win:
+        bot = PokeBot(game_win)
+
+        # Initial bike check
+        bot.check_bicycle()
+
         try:
             while True:
                 bot.move()
